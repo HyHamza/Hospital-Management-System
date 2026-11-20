@@ -42,11 +42,7 @@ class PatientNode:
 
 class HospitalSystem:
     """
-    Core control unit managing patient records, doctors, and appointment scheduling.
-
-    Data Structures:
-    - Singly Linked List (`self.head`) for dynamic memory allocation of patient records.
-    - Double-Ended Queue (`collections.deque`) for O(1) FIFO appointment operations.
+ MAIN CLASS STARTS FROM HERRRREEEEEEEEEEEEEEEEEE :)
     """
 
     def __init__(self) -> None:
@@ -58,7 +54,7 @@ class HospitalSystem:
 
     @property
     def patient_count(self) -> int:
-        """Return total number of registered patients."""
+        """WANT TO KNOOOOOW TOTAL PETIENTS??? USE THIS FUN())))))))"""
         return self._patient_count
 
     @property
@@ -82,7 +78,7 @@ class HospitalSystem:
         return dict(self.appointments[0]) if self.appointments else None
 
     def _find_patient_by_name(self, name: str) -> Optional[PatientNode]:
-        """Case-insensitive helper to sync status for a registered patient."""
+        """Syncinngggggggggggggg patients."""
         target = name.strip().lower()
         curr = self.head
         while curr is not None:
@@ -100,8 +96,7 @@ class HospitalSystem:
         doctor: str = "General OPD",
     ) -> Tuple[bool, str]:
         """
-        Dynamically instantiate a new PatientNode and append it to the tail
-        of the singly linked list after validating inputs and uniqueness.
+        adding new petient in instance.....
         """
         if not isinstance(patient_id, int) or isinstance(patient_id, bool) or patient_id <= 0:
             return False, "Patient ID must be a positive integer."
@@ -146,10 +141,6 @@ class HospitalSystem:
         return True, "Patient added successfully"
 
     def search_patient(self, patient_id: int) -> Optional[PatientNode]:
-        """
-        Traverse the singly linked list sequentially to locate a patient
-        matching the given ID. Returns the PatientNode if found, else None.
-        """
         if not isinstance(patient_id, int) or isinstance(patient_id, bool):
             return None
 
@@ -161,10 +152,7 @@ class HospitalSystem:
         return None
 
     def book_appointment(self, name: str, doctor: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        Enqueue a patient into the consultation queue in O(1) time
-        following the First-In, First-Out (FIFO) protocol.
-        """
+
         clean_name = name.strip() if isinstance(name, str) else ""
         if not clean_name:
             return False, "Patient name cannot be empty."
@@ -209,10 +197,6 @@ class HospitalSystem:
         return True, f"Now attending: {entry['name']}"
 
     def display_patients(self) -> List[PatientNode]:
-        """
-        Iterate through the entire singly linked list and return all
-        registered PatientNode records in order.
-        """
         patients: List[PatientNode] = []
         curr = self.head
         while curr is not None:
