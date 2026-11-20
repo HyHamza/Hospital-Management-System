@@ -13,7 +13,7 @@ DEFAULT_DOCTORS: List[Dict[str, str]] = [
 
 
 class PatientNode:
-    """Fundamental data container (node) for an individual patient record."""
+    # single node in our patient linked list
 
     def __init__(
         self,
@@ -59,22 +59,20 @@ class HospitalSystem:
 
     @property
     def pending_appointments_count(self) -> int:
-        """Return number of patients currently waiting in the appointment queue."""
+        # how many people are still waiting in line
         return len(self.appointments)
 
     @property
     def available_doctors_count(self) -> int:
-        """Return number of doctors currently marked Available."""
         return sum(1 for d in self.doctors if d["status"] == "Available")
 
     @property
     def next_in_queue(self) -> Optional[str]:
-        """Peek at the next patient's name in the queue without removing them (O(1))."""
+        # just peeking at the front of the queue, not popping yet
         return self.appointments[0]["name"] if self.appointments else None
 
     @property
     def next_appointment(self) -> Optional[Dict[str, str]]:
-        """Peek at the next appointment entry (name + doctor) in O(1)."""
         return dict(self.appointments[0]) if self.appointments else None
 
     def _find_patient_by_name(self, name: str) -> Optional[PatientNode]:
@@ -174,14 +172,11 @@ class HospitalSystem:
         return True, f"Appointment booked for {clean_name}"
 
     def call_next(self) -> Tuple[bool, str]:
-        """
-        Dequeue and attend to the next patient from the front of the queue
-        in O(1) time using deque.popleft().
-        """
+        # pop the next person from the front of the queue (FIFO)
         if not self.appointments:
             return False, "No pending appointments"
 
-        # Mark previously attended patient as Attended if they are registered
+        # if someone was already inside, mark them done before calling the next one
         if self.current_attending is not None:
             prev_node = self._find_patient_by_name(self.current_attending["name"])
             if prev_node is not None and prev_node.status == "In Progress":

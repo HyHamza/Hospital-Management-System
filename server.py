@@ -14,6 +14,7 @@ HOST = "127.0.0.1"
 PORT = 8000
 
 hospital = HospitalSystem()
+# lock so concurrent requests don't mess up the linked list / queue
 state_lock = threading.Lock()
 
 
@@ -50,7 +51,7 @@ def build_state_payload() -> Dict[str, Any]:
 
 
 class HospitalRequestHandler(SimpleHTTPRequestHandler):
-    """Serves static HTML/CSS/JS from /web and JSON REST endpoints under /api."""
+    # serves static files from /web and handles /api/* json routes
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=WEB_DIR, **kwargs)
@@ -193,11 +194,12 @@ class HospitalRequestHandler(SimpleHTTPRequestHandler):
             return
 
         if path == "/api/demo-seed":
+            # quick sample data for testing the UI without typing everything manually
             samples = [
-                (101, "Ali Khan", 32, "Seasonal Fever", "Dr. Ibrahim Ashraf — General Medicine"),
-                (102, "Sara Ahmed", 25, "Chronic Migraine", "Dr. Usman Raza — Neurology"),
-                (103, "Usman Tariq", 47, "Hypertension", "Dr. Shawal Nadeem — Cardiology"),
-                (104, "Ayesha Malik", 19, "Allergic Asthma", "Dr. Bisma Iqbal — ENT & Dermatology"),
+                (101, "Ali Khan", 32, "Seasonal Fever", "Dr. Ali Hamza — General Medicine"),
+                (102, "Sara Ahmed", 25, "Chronic Migraine", "Dr. Usman — Neurology"),
+                (103, "Usman Tariq", 47, "Hypertension", "Dr. Shawal — Cardiology"),
+                (104, "Ayesha Malik", 19, "Allergic Asthma", "Dr. Hifza — ENT & Dermatology"),
             ]
             with state_lock:
                 added = 0
@@ -206,8 +208,8 @@ class HospitalRequestHandler(SimpleHTTPRequestHandler):
                     if ok:
                         added += 1
                 if hospital.pending_appointments_count == 0:
-                    hospital.book_appointment("Ali Khan", "Dr. Ibrahim Ashraf — General Medicine")
-                    hospital.book_appointment("Sara Ahmed", "Dr. Usman Raza — Neurology")
+                    hospital.book_appointment("Ali Khan", "Dr. Ali Hamza — General Medicine")
+                    hospital.book_appointment("Sara Ahmed", "Dr. Usman — Neurology")
                 msg = (
                     f"Loaded {added} sample patient records & 2 appointments"
                     if added > 0
