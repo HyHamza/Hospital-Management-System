@@ -14,11 +14,12 @@ HOST = "127.0.0.1"
 PORT = 8000
 
 hospital = HospitalSystem()
-# lock so concurrent requests don't mess up the linked list / queue
+# mutex lock so two browser tabs don't fight over the linked list at the same time lol
 state_lock = threading.Lock()
 
 
 def serialize_patient(node: PatientNode) -> Dict[str, Any]:
+    """TURN A PATIENT NODE INTO CLEAN JSON"""
     return {
         "id": node.id,
         "name": node.name,
@@ -31,6 +32,7 @@ def serialize_patient(node: PatientNode) -> Dict[str, Any]:
 
 
 def build_state_payload() -> Dict[str, Any]:
+    """PACK EVERYTHING THE FRONTEND NEEDS INTO ONE BIG PAYLOAD"""
     patients = [serialize_patient(p) for p in hospital.display_patients()]
     queue = [dict(item) for item in hospital.appointments]
     return {
@@ -51,7 +53,7 @@ def build_state_payload() -> Dict[str, Any]:
 
 
 class HospitalRequestHandler(SimpleHTTPRequestHandler):
-    # serves static files from /web and handles /api/* json routes
+    """THE MAIN HTTP HANDLER — SERVES /web + ALL /api/* ROUTES"""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=WEB_DIR, **kwargs)

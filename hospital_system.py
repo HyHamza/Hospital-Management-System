@@ -13,7 +13,7 @@ DEFAULT_DOCTORS: List[Dict[str, str]] = [
 
 
 class PatientNode:
-    # single node in our patient linked list
+    """SINGLY LINKED LIST NODE — HOLDS ONE PATIENT'S DATA"""
 
     def __init__(
         self,
@@ -59,20 +59,22 @@ class HospitalSystem:
 
     @property
     def pending_appointments_count(self) -> int:
-        # how many people are still waiting in line
+        """HOW MANY PEOPLE ARE STILL WAITING IN LINE??"""
         return len(self.appointments)
 
     @property
     def available_doctors_count(self) -> int:
+        """CHECK WHICH DOCTORS ARE ACTUALLY FREE RIGHT NOW"""
         return sum(1 for d in self.doctors if d["status"] == "Available")
 
     @property
     def next_in_queue(self) -> Optional[str]:
-        # just peeking at the front of the queue, not popping yet
+        """PEEKING AT THE NEXT PATIENT (NO POPPING YET, O(1) FLEX)"""
         return self.appointments[0]["name"] if self.appointments else None
 
     @property
     def next_appointment(self) -> Optional[Dict[str, str]]:
+        """SAME PEEK BUT WITH DOCTOR NAME TOO :)"""
         return dict(self.appointments[0]) if self.appointments else None
 
     def _find_patient_by_name(self, name: str) -> Optional[PatientNode]:
@@ -139,6 +141,7 @@ class HospitalSystem:
         return True, "Patient added successfully"
 
     def search_patient(self, patient_id: int) -> Optional[PatientNode]:
+        """HUNTING DOWN A PATIENT BY ID IN THE LINKED LIST..."""
         if not isinstance(patient_id, int) or isinstance(patient_id, bool):
             return None
 
@@ -150,6 +153,7 @@ class HospitalSystem:
         return None
 
     def book_appointment(self, name: str, doctor: Optional[str] = None) -> Tuple[bool, str]:
+        """THROWING PATIENT INTO THE FIFO QUEUE (O(1) SPEEDRUN)"""
 
         clean_name = name.strip() if isinstance(name, str) else ""
         if not clean_name:
@@ -172,11 +176,11 @@ class HospitalSystem:
         return True, f"Appointment booked for {clean_name}"
 
     def call_next(self) -> Tuple[bool, str]:
-        # pop the next person from the front of the queue (FIFO)
+        """NEXTTTTT PATIENT UP!! POPPING FROM FRONT OF THE QUEUE"""
         if not self.appointments:
             return False, "No pending appointments"
 
-        # if someone was already inside, mark them done before calling the next one
+        # if someone was already with the doc, mark them done first
         if self.current_attending is not None:
             prev_node = self._find_patient_by_name(self.current_attending["name"])
             if prev_node is not None and prev_node.status == "In Progress":
@@ -192,6 +196,7 @@ class HospitalSystem:
         return True, f"Now attending: {entry['name']}"
 
     def display_patients(self) -> List[PatientNode]:
+        """WALK THE WHOLE LINKED LIST AND DUMP ALL PATIENTS"""
         patients: List[PatientNode] = []
         curr = self.head
         while curr is not None:

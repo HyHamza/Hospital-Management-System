@@ -17,8 +17,8 @@ It is built around two classic data structures—a **Singly Linked List** for pa
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/HyHamza/Hostpital-Management-System.git
-cd Hostpital-Management-System
+git clone https://github.com/HyHamza/Hospital-Management-System.git
+cd Hospital-Management-System
 ```
 
 2. Start the server:
