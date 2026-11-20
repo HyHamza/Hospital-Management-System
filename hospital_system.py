@@ -1,23 +1,14 @@
-"""
-Core Data Structures & Business Logic for Hospital Management System.
-
-Implements:
-- PatientNode: Singly Linked List node storing individual patient records.
-- HospitalSystem: Core controller managing dynamic patient records (Singly Linked List),
-  FIFO consultation appointments (collections.deque), and Doctor assignments.
-"""
-
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
 
 DEFAULT_DOCTORS: List[Dict[str, str]] = [
-    {"name": "Dr. Ibrahim Ashraf", "field": "General Medicine", "status": "Available"},
-    {"name": "Dr. Shawal Nadeem", "field": "Cardiology", "status": "Available"},
-    {"name": "Dr. Abubakar Naveed", "field": "Orthopedics", "status": "On Duty"},
     {"name": "Dr. Aibtasam Ali", "field": "Pediatrics", "status": "Available"},
-    {"name": "Dr. Bisma Iqbal", "field": "ENT & Dermatology", "status": "Available"},
-    {"name": "Dr. Usman Raza", "field": "Neurology", "status": "Available"},
+    {"name": "Dr. Ali Hamza", "field": "General Medicine", "status": "Available"},
+    {"name": "Dr. Hifza", "field": "ENT & Dermatology", "status": "Available"},
+    {"name": "Dr. Shawal", "field": "Cardiology", "status": "Available"},
+    {"name": "Dr. Abubakar", "field": "Orthopedics", "status": "On Duty"},
+    {"name": "Dr. Usman", "field": "Neurology", "status": "Available"},
 ]
 
 
