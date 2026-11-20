@@ -1,16 +1,21 @@
 # Hospital Management System
 
-A lightweight, zero-dependency hospital reception and OPD queue management system written in Python, paired with a browser-based dashboard.
+A lightweight, zero-dependency hospital reception and OPD management system written in Python, paired with a browser-based dashboard.
 
-It is built around two classic data structures—a **Singly Linked List** for patient records and a **FIFO double-ended queue (`collections.deque`)** for consultation scheduling—served over Python's standard-library `ThreadingHTTPServer`.
+It is built around classic data structures — a **singly linked list** for patient notes, a **stack** for undo, a **queue** for the pharmacy line, a **circular queue** for doctor shifts, and a **priority queue (binary heap)** for appointments — plus **bubble sort** and **binary search**, served over Python's standard-library `ThreadingHTTPServer`.
 
 ## Features
 
-- **Patient Registration & Lookup**: Store patient records in a custom `PatientNode` singly linked list with input validation, duplicate-ID prevention, and sequential search by ID.
-- **FIFO Consultation Queue**: Book appointments in O(1) time and advance the queue with `Call Next`, automatically updating patient statuses (`Registered` -> `In Queue` -> `In Progress` -> `Attended`).
-- **Doctor Directory**: Tracks available specialists across General Medicine, Cardiology, Orthopedics, Pediatrics, ENT & Dermatology, and Neurology.
-- **Zero External Dependencies**: Runs on Python 3.9+ using only the standard library (`http.server`, `collections`, `threading`, `json`, `argparse`).
-- **One-Click Sample Data**: Populate sample patient records and appointments from the UI or via `POST /api/demo-seed`.
+- **Patient Registration & Lookup**: Patients stored in a dict + list with input validation and duplicate-ID prevention; sorted view by ID or age (bubble sort); lookup by ID (binary search).
+- **Patient Notes**: Visit notes kept in a linked list per patient; each note counts as a visit.
+- **Doctor Directory**: 5 starter doctors with specialty and token fee. View doctors or add a new one.
+- **Priority Appointments**: Book an appointment as Emergency or Normal — emergency tokens (`E-1`, `E-2`…) are always served before normal ones (`N-1`, `N-2`…).
+- **Beds**: 10 beds — assign a patient to a free bed or free an occupied one.
+- **Undo**: One-click undo for the last action (add patient, add note, book appointment, bed assign/free), powered by an undo stack.
+- **Pharmacy Queue**: FIFO token queue — add a token, serve the next one, or view the line.
+- **Shift Rotation**: Doctors rotate on duty through a circular queue.
+- **Dashboard**: Live counts — patients, doctors, waiting appointments, free beds.
+- **Zero External Dependencies**: Runs on Python 3.9+ using only the standard library.
 
 ## Quick Start
 
@@ -39,24 +44,32 @@ python server.py --host 127.0.0.1 --port 8080 --no-browser
 - `--port`: Port number (default: `8000`)
 - `--no-browser`: Start the server without opening a browser tab
 
+You can also run the console version directly:
+
+```bash
+python hospital.py
+```
+
 ## Project Structure
 
 ```text
 .
-├── hospital_system.py       # PatientNode, HospitalSystem, linked list & FIFO queue logic
-├── server.py                # ThreadingHTTPServer, static file serving, and JSON REST API
+├── hospital.py               # Hospital class — all data structures & operations
+├── server.py                 # ThreadingHTTPServer, static file serving, and JSON REST API
 ├── web/
-│   ├── index.html           # Clinical dashboard layout
-│   ├── styles.css           # Dashboard styling
+│   ├── index.html           # Single-page dashboard (all operations on one page)
+│   ├── styles.css           # Dashboard styling (light + dark mode)
 │   └── app.js               # Frontend state, API calls, and DOM updates
 ├── docs/
 │   ├── architecture.md      # Data structures, concurrency model, and state lifecycle
 │   └── api.md               # REST API reference and payload examples
 ├── tests/
-│   └── test_hospital_system.py  # Unit and HTTP API integration tests
+│   └── test_hospital.py     # Unit tests for the Hospital class
 ├── CONTRIBUTING.md
 └── LICENSE
 ```
+
+`hospital_system.py` is an earlier version of the backend, superseded by `hospital.py` (kept for reference).
 
 ## Running Tests
 

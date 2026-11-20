@@ -1,533 +1,468 @@
-/**
- * Hospital Management System — Frontend Controller
- */
+/* Hospital Management System — single-page UI logic.
+   All 11 operations live on the front page; clicking a tile opens its
+   form in the central workspace. No page reloads, no separate pages. */
 
-const state = {
-  patients: [],
-  queue: [],
-  doctors: [],
-  current_attending: null,
-  stats: {
-    patient_count: 0,
-    pending_appointments: 0,
-    available_doctors: 0,
-    total_doctors: 0,
-    next_in_queue: null,
-    next_appointment: null,
-  },
-  highlightedPatientId: null,
-  selectedDoctorLabel: null,
+let state = null;
+let currentOp = "dashboard";
+let sortField = "id";
+let bookEmergency = false;
+
+const $ = (sel) => document.querySelector(sel);
+const body = document.getElementById("workspace-body");
+const titleEl = document.getElementById("workspace-title");
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+async function api(path, method = "GET", payload = null) {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: payload ? JSON.stringify(payload) : null,
+  });
+  return res.json();
+}
+
+let toastTimer = null;
+function toast(msg, isErr = false) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.toggle("err", isErr);
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+function refreshStats() {
+  if (!state) return;
+  const s = state.stats;
+  document.getElementById("stat-patients").textContent = s.patients;
+  document.getElementById("stat-doctors").textContent = s.doctors;
+  document.getElementById("stat-waiting").textContent = s.waiting;
+  document.getElementById("stat-beds").textContent = s.free_beds;
+  document.getElementById("last-update").textContent =
+    new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+async function loadState() {
+  const res = await api("/api/state");
+  if (res.ok) {
+    state = res.state;
+    refreshStats();
+  }
+  return state;
+}
+
+/* ------------------------------------------------------------------ ops */
+
+const OPS = {
+  "add-patient": "Add Patient",
+  "view-sorted": "View Sorted",
+  "find-patient": "Find Patient",
+  "add-note": "Add Note",
+  "doctors": "Doctors",
+  "book-appointment": "Book Appointment",
+  "beds": "Beds",
+  "pharmacy": "Pharmacy Queue",
+  "shifts": "Shifts",
+  "dashboard": "Dashboard",
+  "undo": "Undo",
 };
 
-// DOM References
-const elLiveClock = document.getElementById("live-clock");
-const elStatPatients = document.getElementById("stat-patients");
-const elStatQueue = document.getElementById("stat-queue");
-const elStatDoctors = document.getElementById("stat-doctors");
-const elStatDoctorsTotal = document.getElementById("stat-doctors-total");
-const elStatNext = document.getElementById("stat-next");
-const elStatNextDoc = document.getElementById("stat-next-doc");
-const elConnectionStatus = document.getElementById("connection-status");
-
-const elDoctorsList = document.getElementById("doctors-list");
-const elSelectDoctor = document.getElementById("input-doctor");
-const elSelectApptDoctor = document.getElementById("input-appt-doctor");
-const elPatientsDatalist = document.getElementById("registered-patients-datalist");
-
-const elAttendingBanner = document.getElementById("attending-banner");
-const elAttendingName = document.getElementById("attending-name");
-const elAttendingDoctor = document.getElementById("attending-doctor");
-const btnDismissAttending = document.getElementById("btn-dismiss-attending");
-
-const formAddPatient = document.getElementById("form-add-patient");
-const elAddPatientError = document.getElementById("add-patient-error");
-
-const formSearchPatient = document.getElementById("form-search-patient");
-const elSearchResult = document.getElementById("search-result");
-
-const formBookAppt = document.getElementById("form-book-appointment");
-const elInputApptName = document.getElementById("input-appt-name");
-const elBookApptError = document.getElementById("book-appt-error");
-
-const elQueueList = document.getElementById("queue-list");
-const elPatientsTbody = document.getElementById("patients-tbody");
-const elToastContainer = document.getElementById("toast-container");
-
-const btnCallNext = document.getElementById("btn-call-next");
-const btnCallNextTop = document.getElementById("btn-call-next-top");
-const btnSeedDemo = document.getElementById("btn-seed-demo");
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+function openOp(op) {
+  currentOp = op;
+  titleEl.textContent = OPS[op] || op;
+  document.querySelectorAll(".tile").forEach((t) =>
+    t.classList.toggle("active", t.dataset.op === op));
+  ({
+    "add-patient": renderAddPatient,
+    "view-sorted": renderViewSorted,
+    "find-patient": renderFindPatient,
+    "add-note": renderAddNote,
+    "doctors": renderDoctors,
+    "book-appointment": renderBook,
+    "beds": renderBeds,
+    "pharmacy": renderPharmacy,
+    "shifts": renderShifts,
+    "dashboard": renderDashboard,
+    "undo": renderUndo,
+  })[op]();
 }
 
-function doctorLabel(doc) {
-  return `${doc.name} — ${doc.field}`;
+function msgHtml(text, ok = true) {
+  return text ? `<div class="msg ${ok ? "msg-ok" : "msg-err"}">${esc(text)}</div>` : "";
 }
 
-function statusClass(status) {
-  const s = (status || "").toLowerCase();
-  if (s === "in progress") return "in-progress";
-  if (s === "in queue") return "in-queue";
-  if (s === "attended") return "attended";
-  return "registered";
-}
-
-function updateClock() {
-  if (!elLiveClock) return;
-  const now = new Date();
-  elLiveClock.textContent = now.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+function renderAddPatient(msg = "", ok = true) {
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <form id="f-add-patient" class="form-grid">
+      <div class="field"><label>Patient ID</label>
+        <input type="number" name="id" min="1" placeholder="e.g. 101" required></div>
+      <div class="field"><label>Full Name</label>
+        <input type="text" name="name" placeholder="e.g. Ahmed Khan" required></div>
+      <div class="field-row">
+        <div class="field"><label>Age</label>
+          <input type="number" name="age" min="0" max="150" placeholder="e.g. 32" required></div>
+        <div class="field"><label>Problem / Symptoms</label>
+          <input type="text" name="problem" placeholder="e.g. Cough, fever" required></div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Create Patient +</button>
+        <button type="button" class="btn btn-ghost" onclick="openOp('dashboard')">Cancel</button>
+      </div>
+    </form>`;
+  document.getElementById("f-add-patient").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await api("/api/patients", "POST", {
+      id: Number(f.get("id")), name: f.get("name"),
+      age: Number(f.get("age")), problem: f.get("problem"),
+    });
+    await loadState();
+    if (res.ok) {
+      toast(res.message);
+      renderAddPatient(res.message, true);
+    } else {
+      toast(res.error, true);
+      renderAddPatient(res.error, false);
+    }
   });
 }
 
-function showToast(message, type = "info") {
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  elToastContainer.appendChild(toast);
-
-  setTimeout(() => {
-    toast.style.opacity = "0";
-    toast.style.transition = "opacity 0.2s ease";
-    setTimeout(() => toast.remove(), 220);
-  }, 3000);
+function patientsTable(patients) {
+  if (!patients.length) return `<p class="muted">No patients yet. Add one first.</p>`;
+  return `<table class="tbl"><thead><tr>
+      <th>ID</th><th>Name</th><th>Age</th><th>Problem</th><th>Visits</th>
+    </tr></thead><tbody>
+    ${patients.map((p) => `<tr><td>${p.id}</td><td>${esc(p.name)}</td><td>${p.age}</td>
+      <td>${esc(p.problem)}</td><td>${p.visits}</td></tr>`).join("")}
+    </tbody></table>`;
 }
 
-function setOnlineStatus(online) {
-  if (online) {
-    elConnectionStatus.classList.remove("offline");
-    elConnectionStatus.innerHTML = `<span class="status-dot"></span>Online`;
-  } else {
-    elConnectionStatus.classList.add("offline");
-    elConnectionStatus.innerHTML = `<span class="status-dot"></span>Offline`;
-  }
-}
-
-async function apiRequest(url, options = {}) {
-  try {
-    const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
-    const data = await res.json();
-    setOnlineStatus(true);
-    return { status: res.status, data };
-  } catch (err) {
-    setOnlineStatus(false);
-    showToast("Server offline. Please start server.py.", "error");
-    throw err;
-  }
-}
-
-function applyState(newState) {
-  state.patients = newState.patients || [];
-  state.queue = newState.queue || [];
-  state.doctors = newState.doctors || state.doctors;
-  state.current_attending = newState.current_attending || null;
-  state.stats = newState.stats || state.stats;
-  renderAll();
-}
-
-function renderAll() {
-  renderStats();
-  renderDoctors();
-  renderDoctorDropdowns();
-  renderPatientDatalist();
-  renderQueue();
-  renderPatientsTable();
-}
-
-function renderStats() {
-  const {
-    patient_count,
-    pending_appointments,
-    available_doctors,
-    total_doctors,
-    next_appointment,
-  } = state.stats;
-
-  elStatPatients.textContent = String(patient_count);
-  elStatQueue.textContent = String(pending_appointments);
-  elStatDoctors.textContent = String(available_doctors);
-  elStatDoctorsTotal.textContent = `of ${total_doctors}`;
-
-  if (next_appointment && next_appointment.name) {
-    elStatNext.textContent = next_appointment.name;
-    elStatNext.classList.remove("empty");
-    elStatNextDoc.textContent = next_appointment.doctor || "";
-  } else {
-    elStatNext.textContent = "No appointments";
-    elStatNext.classList.add("empty");
-    elStatNextDoc.textContent = "";
-  }
-}
-
-function renderDoctors() {
-  if (!state.doctors.length) {
-    elDoctorsList.innerHTML = "";
-    return;
-  }
-
-  elDoctorsList.innerHTML = state.doctors
-    .map((doc) => {
-      const label = doctorLabel(doc);
-      const isAvailable = doc.status === "Available";
-      const isSelected = state.selectedDoctorLabel === label;
-      return `
-        <button
-          type="button"
-          class="doctor-chip ${isSelected ? "selected" : ""}"
-          data-doctor-label="${escapeHtml(label)}"
-        >
-          <span class="doctor-chip-name">${escapeHtml(doc.name)}</span>
-          <span class="doctor-chip-field">&mdash; ${escapeHtml(doc.field)}</span>
-          <span class="doctor-status-badge ${isAvailable ? "available" : "on-duty"}">
-            ${escapeHtml(doc.status)}
-          </span>
-        </button>
-      `;
-    })
-    .join("");
-}
-
-function renderDoctorDropdowns() {
-  if (!state.doctors.length) return;
-
-  const currentPatientDoc = elSelectDoctor.value;
-  const currentApptDoc = elSelectApptDoctor.value;
-
-  const optionsHtml = state.doctors
-    .map((doc) => {
-      const label = doctorLabel(doc);
-      return `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
-    })
-    .join("");
-
-  if (elSelectDoctor.options.length !== state.doctors.length) {
-    elSelectDoctor.innerHTML = optionsHtml;
-    if (currentPatientDoc) elSelectDoctor.value = currentPatientDoc;
-  }
-
-  if (elSelectApptDoctor.options.length !== state.doctors.length) {
-    elSelectApptDoctor.innerHTML = optionsHtml;
-    if (currentApptDoc) elSelectApptDoctor.value = currentApptDoc;
-  }
-}
-
-function renderPatientDatalist() {
-  elPatientsDatalist.innerHTML = state.patients
-    .map((p) => `<option value="${escapeHtml(p.name)}"></option>`)
-    .join("");
-}
-
-function renderQueue() {
-  if (!state.queue.length) {
-    elQueueList.innerHTML = `
-      <div class="empty-state">
-        <p class="empty-title">No pending appointments</p>
+function renderViewSorted() {
+  const list = state ? state.patients : [];
+  const sorted = [...list].sort((a, b) =>
+    sortField === "age" ? a.age - b.age : a.id - b.id);
+  body.innerHTML = `
+    <div class="field" style="margin-bottom:12px"><label>Sort by</label>
+      <div class="seg">
+        <button type="button" id="sort-id" class="${sortField === "id" ? "on" : ""}">ID</button>
+        <button type="button" id="sort-age" class="${sortField === "age" ? "on" : ""}">Age</button>
       </div>
-    `;
-    return;
-  }
+    </div>
+    ${patientsTable(sorted)}`;
+  document.getElementById("sort-id").onclick = () => { sortField = "id"; renderViewSorted(); };
+  document.getElementById("sort-age").onclick = () => { sortField = "age"; renderViewSorted(); };
+}
 
-  const fragments = [];
-  state.queue.forEach((entry, idx) => {
-    const isFront = idx === 0;
-    const name = typeof entry === "string" ? entry : entry.name;
-    const doctor = typeof entry === "string" ? "" : entry.doctor || "";
-    fragments.push(`
-      <div class="queue-ticket ${isFront ? "is-front" : ""}">
-        <span class="queue-pos">${idx + 1}</span>
-        <div class="queue-info">
-          <span class="queue-name">${escapeHtml(name)}</span>
-          <span class="queue-sub">${isFront ? "Next Up" : `#${idx + 1} in line`}</span>
-          ${doctor ? `<span class="queue-doc">${escapeHtml(doctor)}</span>` : ""}
-        </div>
-      </div>
-    `);
-    if (idx < state.queue.length - 1) {
-      fragments.push(`<span class="queue-arrow" aria-hidden="true">&rarr;</span>`);
+function patientCard(p) {
+  return `<div class="card">
+    <h3>${esc(p.name)} <span class="muted">#${p.id}</span></h3>
+    <p>Age: <b>${p.age}</b> &nbsp;•&nbsp; Problem: <b>${esc(p.problem)}</b> &nbsp;•&nbsp; Visits: <b>${p.visits}</b></p>
+    <p class="muted">Notes (${p.notes.length}):</p>
+    ${p.notes.length
+      ? `<ul class="q-list">${p.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`
+      : `<p class="muted">No notes yet.</p>`}
+  </div>`;
+}
+
+function renderFindPatient(msg = "", ok = true) {
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <form id="f-find" class="form-grid">
+      <div class="field"><label>Patient ID</label>
+        <input type="number" name="id" min="1" placeholder="e.g. 101" required></div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">Find Patient</button></div>
+    </form>
+    <div id="find-result" style="margin-top:14px"></div>`;
+  document.getElementById("f-find").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = Number(new FormData(e.target).get("id"));
+    const res = await api(`/api/patients/${id}`);
+    document.getElementById("find-result").innerHTML = res.ok
+      ? patientCard(res.patient)
+      : `<div class="msg msg-err">${esc(res.error)}</div>`;
+  });
+}
+
+function renderAddNote(msg = "", ok = true) {
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <form id="f-note" class="form-grid">
+      <div class="field"><label>Patient ID</label>
+        <input type="number" name="id" min="1" placeholder="e.g. 101" required></div>
+      <div class="field"><label>Note</label>
+        <textarea name="note" rows="3" placeholder="e.g. Follow-up in 2 weeks, BP normal" required></textarea></div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">Add Note +</button></div>
+    </form>`;
+  document.getElementById("f-note").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await api(`/api/patients/${Number(f.get("id"))}/notes`, "POST", { note: f.get("note") });
+    await loadState();
+    if (res.ok) {
+      toast(res.message);
+      renderAddNote(res.message, true);
+    } else {
+      toast(res.error, true);
+      renderAddNote(res.error, false);
     }
   });
-
-  elQueueList.innerHTML = fragments.join("");
 }
 
-function renderPatientsTable() {
-  if (!state.patients.length) {
-    elPatientsTbody.innerHTML = `
-      <tr>
-        <td colspan="7">
-          <div class="empty-state">
-            <p class="empty-title">No patient records found</p>
-          </div>
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  elPatientsTbody.innerHTML = state.patients
-    .map((p) => {
-      const isHighlighted = state.highlightedPatientId === p.id;
-      return `
-        <tr class="${isHighlighted ? "row-highlight" : ""}">
-          <td class="col-id"><span class="id-pill">#${p.id}</span></td>
-          <td><strong>${escapeHtml(p.name)}</strong></td>
-          <td class="col-age">${p.age}</td>
-          <td><span class="disease-pill">${escapeHtml(p.disease)}</span></td>
-          <td class="doctor-cell">${escapeHtml(p.doctor || "General OPD")}</td>
-          <td>
-            <span class="status-badge ${statusClass(p.status)}">
-              ${escapeHtml(p.status || "Registered")}
-            </span>
-          </td>
-          <td class="col-action">
-            <button
-              type="button"
-              class="btn btn-secondary btn-xs"
-              data-quick-book-name="${escapeHtml(p.name)}"
-              data-quick-book-doctor="${escapeHtml(p.doctor || "")}"
-            >
-              Book
-            </button>
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
-}
-
-// ==========================================================================
-// Event Handlers
-// ==========================================================================
-
-elDoctorsList.addEventListener("click", (e) => {
-  const chip = e.target.closest("[data-doctor-label]");
-  if (!chip) return;
-  const label = chip.getAttribute("data-doctor-label");
-  if (!label) return;
-
-  state.selectedDoctorLabel = label;
-  elSelectDoctor.value = label;
-  elSelectApptDoctor.value = label;
-  renderDoctors();
-  showToast(`Selected ${label}`, "info");
-});
-
-elInputApptName.addEventListener("change", () => {
-  const entered = elInputApptName.value.trim().toLowerCase();
-  const matched = state.patients.find((p) => p.name.toLowerCase() === entered);
-  if (matched && matched.doctor) {
-    elSelectApptDoctor.value = matched.doctor;
-  }
-});
-
-formAddPatient.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  elAddPatientError.classList.add("hidden");
-
-  const id = document.getElementById("input-id").value.trim();
-  const name = document.getElementById("input-name").value.trim();
-  const age = document.getElementById("input-age").value.trim();
-  const disease = document.getElementById("input-disease").value.trim();
-  const doctor = elSelectDoctor.value;
-
-  if (!id || !name || !age || !disease) {
-    elAddPatientError.textContent = "Please fill in all fields.";
-    elAddPatientError.classList.remove("hidden");
-    return;
-  }
-
-  try {
-    const { data } = await apiRequest("/api/patients", {
-      method: "POST",
-      body: JSON.stringify({ id: Number(id), name, age: Number(age), disease, doctor }),
+function renderDoctors(msg = "", ok = true) {
+  const docs = state ? state.doctors : [];
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    ${docs.map((d) => `
+      <div class="card">
+        <h3>${esc(d.name)} <span class="muted">${esc(d.id)} • ${esc(d.spec)} • Fee Rs ${d.fee}</span></h3>
+        <p>Waiting: <b>${d.waiting}</b> ${d.queue.length
+          ? "— " + d.queue.map((q) => `<span class="tag ${q.emergency ? "tag-emg" : "tag-nor"}">${esc(q.token)} · ${esc(q.patient_name)}</span>`).join(" ")
+          : `<span class="muted">queue empty</span>`}</p>
+      </div>`).join("") || `<p class="muted">No doctors yet.</p>`}
+    <h3 style="margin:16px 0 8px">Add Doctor</h3>
+    <form id="f-doc" class="form-grid">
+      <div class="field-row">
+        <div class="field"><label>Doctor ID</label><input type="text" name="id" placeholder="e.g. D6" required></div>
+        <div class="field"><label>Full Name</label><input type="text" name="name" placeholder="e.g. Dr. Sana" required></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Specialty</label><input type="text" name="spec" placeholder="e.g. Physician" required></div>
+        <div class="field"><label>Token Fee (Rs)</label><input type="number" name="fee" min="0" placeholder="e.g. 1200" required></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">Add Doctor +</button></div>
+    </form>`;
+  document.getElementById("f-doc").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await api("/api/doctors", "POST", {
+      id: f.get("id"), name: f.get("name"), spec: f.get("spec"), fee: Number(f.get("fee")),
     });
-
-    if (data.ok) {
-      formAddPatient.reset();
-      if (state.selectedDoctorLabel) {
-        elSelectDoctor.value = state.selectedDoctorLabel;
-      }
-      state.highlightedPatientId = Number(id);
-      applyState(data.state);
-      showToast(data.message, "success");
+    await loadState();
+    if (res.ok) {
+      toast(res.message);
+      renderDoctors(res.message, true);
     } else {
-      elAddPatientError.textContent = data.message;
-      elAddPatientError.classList.remove("hidden");
-      showToast(data.message, "error");
+      toast(res.error, true);
+      renderDoctors(res.error, false);
     }
-  } catch {
-    // Handled by apiRequest
-  }
-});
+  });
+}
 
-formSearchPatient.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const rawId = document.getElementById("input-search-id").value.trim();
-  if (!rawId) return;
-
-  try {
-    const { data } = await apiRequest(`/api/patients/${encodeURIComponent(rawId)}`);
-
-    elSearchResult.classList.remove("hidden", "found", "not-found");
-    if (data.found && data.patient) {
-      const p = data.patient;
-      state.highlightedPatientId = p.id;
-      renderPatientsTable();
-
-      elSearchResult.classList.add("found");
-      elSearchResult.innerHTML = `
-        <div class="search-card-head">
-          <span class="search-card-title">Patient Found</span>
-          <span class="id-pill">#${p.id}</span>
+function renderBook(msg = "", ok = true) {
+  const docs = state ? state.doctors : [];
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <form id="f-book" class="form-grid">
+      <div class="field"><label>Doctor</label>
+        <select name="doctor_id" required>
+          ${docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)} — ${esc(d.spec)} (Rs ${d.fee})</option>`).join("")}
+        </select></div>
+      <div class="field"><label>Patient ID</label>
+        <input type="number" name="patient_id" min="1" placeholder="e.g. 101" required></div>
+      <div class="field"><label>Priority</label>
+        <div class="seg">
+          <button type="button" id="pri-n" class="${!bookEmergency ? "on" : ""}">Normal</button>
+          <button type="button" id="pri-e" class="emg ${bookEmergency ? "on" : ""}">Emergency</button>
         </div>
-        <div class="search-card-grid">
-          <div class="search-meta-item">
-            <span>Name</span>
-            <strong>${escapeHtml(p.name)}</strong>
-          </div>
-          <div class="search-meta-item">
-            <span>Age</span>
-            <strong>${p.age} years</strong>
-          </div>
-          <div class="search-meta-item">
-            <span>Disease</span>
-            <strong>${escapeHtml(p.disease)}</strong>
-          </div>
-          <div class="search-meta-item">
-            <span>Status</span>
-            <strong>${escapeHtml(p.status || "Registered")}</strong>
-          </div>
-          <div class="search-meta-item" style="grid-column: span 2;">
-            <span>Doctor &amp; Field</span>
-            <strong>${escapeHtml(p.doctor || "General OPD")}</strong>
-          </div>
-        </div>
-      `;
-    } else {
-      state.highlightedPatientId = null;
-      renderPatientsTable();
-
-      elSearchResult.classList.add("not-found");
-      elSearchResult.textContent = data.message || "Patient not found";
-      showToast(data.message || "Patient not found", "warning");
-    }
-  } catch {
-    // Handled by apiRequest
-  }
-});
-
-async function bookAppointmentByName(name, doctor) {
-  elBookApptError.classList.add("hidden");
-  try {
-    const { data } = await apiRequest("/api/appointments", {
-      method: "POST",
-      body: JSON.stringify({ name, doctor }),
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">+ Book Now</button>
+        <button type="button" class="btn btn-ghost" onclick="openOp('dashboard')">Cancel</button>
+      </div>
+    </form>
+    <div id="book-result" style="margin-top:14px"></div>`;
+  document.getElementById("pri-n").onclick = () => { bookEmergency = false; renderBook(); };
+  document.getElementById("pri-e").onclick = () => { bookEmergency = true; renderBook(); };
+  document.getElementById("f-book").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await api("/api/appointments", "POST", {
+      doctor_id: f.get("doctor_id"),
+      patient_id: Number(f.get("patient_id")),
+      emergency: bookEmergency,
     });
-
-    if (data.ok) {
-      applyState(data.state);
-      showToast(data.message, "success");
-      return true;
+    await loadState();
+    if (res.ok) {
+      toast(res.message);
+      document.getElementById("book-result").innerHTML = `
+        <div class="card"><h3>Token ${esc(res.token)} ${res.emergency ? '<span class="tag tag-emg">EMERGENCY</span>' : '<span class="tag tag-nor">NORMAL</span>'}</h3>
+        <p>${esc(res.patient)} with ${esc(res.doctor)} — Fee Rs ${res.fee}</p></div>`;
     } else {
-      elBookApptError.textContent = data.message;
-      elBookApptError.classList.remove("hidden");
-      showToast(data.message, "error");
-      return false;
+      toast(res.error, true);
+      document.getElementById("book-result").innerHTML =
+        `<div class="msg msg-err">${esc(res.error)}</div>`;
     }
-  } catch {
-    return false;
-  }
+  });
 }
 
-formBookAppt.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const name = elInputApptName.value.trim();
-  const doctor = elSelectApptDoctor.value;
-  if (!name) {
-    elBookApptError.textContent = "Please enter a patient name.";
-    elBookApptError.classList.remove("hidden");
-    return;
-  }
-
-  const ok = await bookAppointmentByName(name, doctor);
-  if (ok) {
-    elInputApptName.value = "";
-  }
-});
-
-elPatientsTbody.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-quick-book-name]");
-  if (!btn) return;
-  const name = btn.getAttribute("data-quick-book-name");
-  const doctor = btn.getAttribute("data-quick-book-doctor") || elSelectApptDoctor.value;
-  if (name) {
-    bookAppointmentByName(name, doctor);
-  }
-});
-
-async function handleCallNext() {
-  try {
-    const { data } = await apiRequest("/api/appointments/call-next", {
-      method: "POST",
+function renderBeds(msg = "", ok = true) {
+  const beds = state ? state.beds : [];
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <div class="beds-grid">
+      ${beds.map((b) => `<div class="bed ${b.status === "Free" ? "free" : "occ"}">
+          Bed ${b.bed}<small>${b.status === "Free" ? "Free" : "Patient " + b.patient_id}</small>
+        </div>`).join("")}
+    </div>
+    <form id="f-bed" class="form-grid">
+      <div class="field-row">
+        <div class="field"><label>Bed (1–10)</label>
+          <input type="number" name="bed" min="1" max="10" placeholder="e.g. 3" required></div>
+        <div class="field"><label>Patient ID</label>
+          <input type="number" name="patient_id" min="1" placeholder="e.g. 101" required></div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Assign Bed</button>
+        <button type="button" id="btn-free-bed" class="btn btn-ghost">Free This Bed</button>
+      </div>
+    </form>`;
+  document.getElementById("f-bed").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const res = await api("/api/beds/assign", "POST", {
+      bed: Number(f.get("bed")), patient_id: Number(f.get("patient_id")),
     });
-
-    applyState(data.state);
-    if (data.ok && data.attended) {
-      elAttendingName.textContent = data.attended.name || data.attended;
-      elAttendingDoctor.textContent = data.attended.doctor || "";
-      elAttendingDoctor.classList.toggle("hidden", !data.attended.doctor);
-      elAttendingBanner.classList.remove("hidden");
-      showToast(data.message, "success");
-    } else {
-      showToast(data.message || "No pending appointments", "warning");
-    }
-  } catch {
-    // Handled by apiRequest
-  }
+    await loadState();
+    toast(res.ok ? res.message : res.error, !res.ok);
+    renderBeds(res.ok ? res.message : res.error, res.ok);
+  });
+  document.getElementById("btn-free-bed").addEventListener("click", async () => {
+    const bed = Number(document.querySelector('#f-bed [name="bed"]').value);
+    if (!bed) { toast("Enter a bed number first.", true); return; }
+    const res = await api("/api/beds/free", "POST", { bed });
+    await loadState();
+    toast(res.ok ? res.message : res.error, !res.ok);
+    renderBeds(res.ok ? res.message : res.error, res.ok);
+  });
 }
 
-btnCallNext.addEventListener("click", handleCallNext);
-btnCallNextTop.addEventListener("click", handleCallNext);
-btnDismissAttending.addEventListener("click", () => {
-  elAttendingBanner.classList.add("hidden");
-});
+function renderPharmacy(msg = "", ok = true) {
+  const q = state ? state.pharmacy : [];
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <form id="f-pharm" class="form-grid">
+      <div class="field"><label>Token / Name</label>
+        <input type="text" name="token" placeholder="e.g. T-12 or patient name" required></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">Add Token +</button>
+        <button type="button" id="btn-serve" class="btn btn-green">Serve Next</button>
+      </div>
+    </form>
+    <h3 style="margin:16px 0 8px">Queue (${q.length})</h3>
+    ${q.length
+      ? `<ol class="q-list">${q.map((t, i) => `<li>${i === 0 ? "▶ " : ""}${esc(t)}</li>`).join("")}</ol>`
+      : `<p class="muted">Pharmacy queue is empty.</p>`}`;
+  document.getElementById("f-pharm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const res = await api("/api/pharmacy", "POST", { token: new FormData(e.target).get("token") });
+    await loadState();
+    toast(res.ok ? res.message : res.error, !res.ok);
+    renderPharmacy(res.ok ? res.message : res.error, res.ok);
+  });
+  document.getElementById("btn-serve").addEventListener("click", async () => {
+    const res = await api("/api/pharmacy/serve", "POST", {});
+    await loadState();
+    toast(res.ok ? res.message : res.error, !res.ok);
+    renderPharmacy(res.ok ? res.message : res.error, res.ok);
+  });
+}
 
-btnSeedDemo.addEventListener("click", async () => {
-  try {
-    const { data } = await apiRequest("/api/demo-seed", { method: "POST" });
-    if (data.ok) {
-      applyState(data.state);
-      showToast(data.message, "info");
-    }
-  } catch {
-    // Handled by apiRequest
-  }
-});
+function renderShifts(msg = "", ok = true) {
+  const shifts = state ? state.shifts : [];
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <p>On duty now: <b>${state && state.on_duty ? esc(state.on_duty) : "—"}</b></p>
+    <ol class="q-list">
+      ${shifts.map((s, i) => `<li>${esc(s)} ${i === 0 ? '<span class="tag tag-duty">ON DUTY</span>' : ""}</li>`).join("")}
+    </ol>
+    <div class="btn-row" style="margin-top:14px">
+      <button type="button" id="btn-rotate" class="btn btn-primary">Rotate Shift ↻</button>
+    </div>`;
+  document.getElementById("btn-rotate").addEventListener("click", async () => {
+    const res = await api("/api/shifts/rotate", "POST", {});
+    await loadState();
+    toast(res.ok ? res.message : res.error, !res.ok);
+    renderShifts(res.ok ? res.message : res.error, res.ok);
+  });
+}
 
-// Initial State Load & Live Clock
-updateClock();
-setInterval(updateClock, 30000);
+function renderDashboard() {
+  const s = state ? state.stats : { patients: 0, doctors: 0, waiting: 0, free_beds: 0, total_beds: 10 };
+  const docs = state ? state.doctors : [];
+  const beds = state ? state.beds : [];
+  body.innerHTML = `
+    <div class="stats" style="grid-template-columns: repeat(2, 1fr); margin-bottom: 14px">
+      <div class="stat-card stat-teal"><div class="stat-text"><span class="stat-label">Patients</span><span class="stat-num">${s.patients}</span></div></div>
+      <div class="stat-card stat-blue"><div class="stat-text"><span class="stat-label">Doctors</span><span class="stat-num">${s.doctors}</span></div></div>
+      <div class="stat-card stat-blue"><div class="stat-text"><span class="stat-label">Waiting</span><span class="stat-num">${s.waiting}</span></div></div>
+      <div class="stat-card stat-teal"><div class="stat-text"><span class="stat-label">Free Beds</span><span class="stat-num">${s.free_beds}/${s.total_beds}</span></div></div>
+    </div>
+    <h3 style="margin:6px 0 8px">Doctor queues</h3>
+    ${docs.map((d) => `<p><b>${esc(d.name)}</b> <span class="muted">(${esc(d.spec)})</span> — waiting <b>${d.waiting}</b></p>`).join("") || `<p class="muted">No doctors.</p>`}
+    <h3 style="margin:14px 0 8px">Beds</h3>
+    <div class="beds-grid">
+      ${beds.map((b) => `<div class="bed ${b.status === "Free" ? "free" : "occ"}">Bed ${b.bed}<small>${b.status === "Free" ? "Free" : "Patient " + b.patient_id}</small></div>`).join("")}
+    </div>`;
+}
 
-(async function init() {
-  try {
-    const { data } = await apiRequest("/api/state");
-    if (data.ok) {
-      applyState(data.state);
-    }
-  } catch {
-    // Handled by apiRequest
-  }
-})();
+function describeUndo(last) {
+  if (!last) return "Nothing to undo.";
+  const kind = last[0];
+  if (kind === "ADD_PATIENT") return `Add Patient — patient ID ${last[1]}`;
+  if (kind === "ADD_NOTE") return `Add Note — patient ID ${last[1]}`;
+  if (kind === "BOOK_APPT") return `Book Appointment — token ${last[2]} (doctor ${last[1]})`;
+  if (kind === "BED") return `Bed ${last[1] + 1} — ${last[2] === 0 ? "was assigned" : "was freed (patient " + last[2] + ")"}`;
+  return kind;
+}
+
+function renderUndo(msg = "", ok = true) {
+  const last = state ? state.undo_last : null;
+  body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    <div class="card">
+      <h3>Last action</h3>
+      <p>${esc(describeUndo(last))}</p>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="btn-undo" class="btn btn-danger" ${last ? "" : "disabled"}>Undo Last Action ↩</button>
+    </div>
+    <p class="muted">Undo reverses the last add-patient, add-note, booking or bed change.</p>`;
+  document.getElementById("btn-undo").addEventListener("click", doUndo);
+}
+
+async function doUndo() {
+  const res = await api("/api/undo", "POST", {});
+  await loadState();
+  toast(res.ok ? res.message : res.error, !res.ok);
+  if (currentOp === "undo") renderUndo(res.ok ? res.message : res.error, res.ok);
+  else openOp(currentOp);
+}
+
+/* ------------------------------------------------------------------ boot */
+
+document.querySelectorAll(".tile").forEach((t) =>
+  t.addEventListener("click", () => openOp(t.dataset.op)));
+
+document.getElementById("top-undo").addEventListener("click", doUndo);
+
+const themeBtn = document.getElementById("theme-toggle");
+function applyTheme(dark) {
+  document.body.classList.toggle("dark", dark);
+  document.getElementById("theme-icon-moon").classList.toggle("hidden", dark);
+  document.getElementById("theme-icon-sun").classList.toggle("hidden", !dark);
+  document.getElementById("theme-label").textContent = dark ? "Light Mode" : "Dark Mode";
+  try { localStorage.setItem("hms-theme", dark ? "dark" : "light"); } catch (e) { /* ignore */ }
+}
+themeBtn.addEventListener("click", () =>
+  applyTheme(!document.body.classList.contains("dark")));
+try {
+  applyTheme(localStorage.getItem("hms-theme") === "dark");
+} catch (e) { applyTheme(false); }
+
+loadState().then(() => openOp("dashboard"));

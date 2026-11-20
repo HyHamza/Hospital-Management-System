@@ -1,33 +1,63 @@
 # Architecture
 
-## Overview
+## Model (`hospital.py` — Ali's file, unchanged)
 
-The application is split into three layers:
+All state lives in one `Hospital` object, built only from the data
+structures already in the file:
 
-1. **Core Domain (`hospital_system.py`)**: Pure Python data structures and business rules (`PatientNode`, `HospitalSystem`). No HTTP or UI dependencies.
-2. **HTTP Server (`server.py`)**: Serves the static frontend from `web/` and exposes JSON endpoints under `/api/*`.
-3. **Frontend (`web/`)**: Vanilla HTML, CSS, and JavaScript that polls/fetches state from `/api/state` and renders the dashboard.
+| Structure | Used for |
+| --------- | -------- |
+| `Node` / `LinkedList` | Patient notes (each patient has a notes list) |
+| `Stack` | Undo stack — `("ADD_PATIENT", pid)`, `("ADD_NOTE", pid)`, `("BOOK_APPT", doc_id, token, pid)`, `("BED", idx, old_pid)` |
+| `Queue` (linked list) | Pharmacy queue (FIFO) |
+| `CircularQueue(20)` | Doctor shift rotation — front item is on duty |
+| `PriorityQueue` (binary heap) | One per doctor — appointment tokens; Emergency (priority 1) before Normal (priority 2), FIFO within a priority by enqueue count. Token format `E-n` / `N-n` |
+| `bubble_sort`, `binary_search` | View Sorted (by id / age) and Find Patient |
+| `patients_map` (dict) + `patients_list` (list) | O(1) lookup by id + ordered records |
+| `doctors_map` (dict) | Doctors with id, name, specialty, fee, queue |
+| `beds` (list of 10) | Bed slots — `0` = free, otherwise patient id |
 
-## Data Structures
+Starter doctors (`STARTER_DOCTORS`): D1 Dr. Tariq (Neurosurgeon, 2500),
+D2 Dr. Ayesha (Cardiologist, 2000), D3 Dr. Bilal (Orthopedic, 1800),
+D4 Dr. Sana (Physician, 1200), D5 Dr. Kamran (Pediatrician, 1500).
+They also seed the shift rotation.
 
-| Component | Implementation | Time Complexity | Purpose |
-| --- | --- | --- | --- |
-| Patient Registry | Singly Linked List (`PatientNode`) | Insert: O(n) (duplicate check), Search: O(n), Traverse: O(n) | Dynamic in-memory patient storage preserving registration order |
-| Appointment Queue | `collections.deque` | Enqueue (`append`): O(1), Dequeue (`popleft`): O(1), Peek: O(1) | Strict FIFO consultation scheduling |
-| Doctor Directory | `list[dict[str, str]]` | Lookup/count: O(d) | Tracks doctor names, specialties, and availability |
+## Server (`server.py`)
 
-## Patient Status Lifecycle
+- Python stdlib only: `ThreadingHTTPServer` + `SimpleHTTPRequestHandler`.
+- Serves the static single-page UI from `web/` and the JSON API in
+  `docs/api.md`.
+- One global `Hospital` instance, guarded by a `threading.Lock` so two
+  browser tabs can't race on the same structures.
+- `hospital.py` methods print instead of returning, so the server
+  determines success from state before/after each call and computes the
+  booking token from the doctor's queue count after enqueue.
+- Everything is in-memory: restarting the server resets all data.
+  This is a university project, not for production.
 
-When a patient is registered via `HospitalSystem.add_patient`, their status starts as `Registered`. If they are later booked into the consultation queue (matched case-insensitively by name), their status transitions as follows:
+## Frontend (`web/`)
 
-```text
-Registered ──(book_appointment)──▶ In Queue ──(call_next)──▶ In Progress ──(next call_next)──▶ Attended
+- `index.html` — single page: header (logo + Undo + dark-mode toggle),
+  live stat strip (Patients / Doctors / Waiting / Free Beds), all 11
+  operations as tiles grouped in sections (Patients / Doctors &
+  Appointments / Hospital), and a central workspace panel where the
+  clicked operation opens its form. No separate pages.
+- `styles.css` — light theme white / blue / dark blue (patient tiles
+  teal, doctor tiles blue); dark mode uses dark-green accents and a
+  green glowing logo. Buttons are rounded with borders darker than the
+  button body; hover/press lightens them.
+- `app.js` — vanilla JS, `fetch` against `/api/*`. No build step, no
+  dependencies, no images — icons are inline SVG (doctor cap, ♂/♀
+  symbols, clock, bed) and the logo is a blue rounded square with a
+  white cross.
+
+## Tests (`tests/test_hospital.py`)
+
+`unittest` tests for the `Hospital` class: add / duplicate id, find
+(binary search), sort (bubble sort), notes, booking tokens
+(Emergency before Normal), beds assign/free, undo (add patient /
+note / booking / bed), pharmacy FIFO, shift rotation. Run with:
+
+```bash
+python -m unittest discover -s tests -v
 ```
-
-Walk-in patients who are not yet in the linked list can still be booked into the appointment queue; they are queued with the selected (or default) doctor without creating a `PatientNode`.
-
-## Concurrency & State
-
-- `server.py` uses `http.server.ThreadingHTTPServer` so concurrent browser requests do not block one another.
-- All reads and mutations on the shared `HospitalSystem` instance are guarded by `state_lock` (`threading.Lock()`).
-- State is stored in memory and resets when the server process stops.
