@@ -1,13 +1,3 @@
-"""
-Zero-Dependency Python Web Server for Hospital Management System.
-
-Bridges the HTML/CSS/JS Clinical Dashboard directly to the core
-HospitalSystem (Singly Linked List + collections.deque + Doctors) backend.
-
-Run with:
-    python server.py
-"""
-
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import argparse
 import json
