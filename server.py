@@ -1,69 +1,136 @@
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+"""Hospital Management System — web server.
+
+Serves the single-page dashboard in web/ and a JSON API backed by the
+Hospital class from hospital.py (Ali's file — kept as-is, no changes).
+
+Hospital's methods print instead of returning, so success is determined
+from state before/after each call (e.g. pid in patients_map), and the
+booking token is computed from the doctor's queue count after enqueue.
+"""
+
 import argparse
 import json
 import os
 import threading
 import urllib.parse
 import webbrowser
-from typing import Any, Dict
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Dict, List, Optional
 
-from hospital_system import HospitalSystem, PatientNode
+from hospital import Hospital, PriorityQueue, binary_search, bubble_sort
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 HOST = "127.0.0.1"
 PORT = 8000
 
-hospital = HospitalSystem()
-# mutex lock so two browser tabs don't fight over the linked list at the same time lol
+hospital = Hospital()
 state_lock = threading.Lock()
 
 
-def serialize_patient(node: PatientNode) -> Dict[str, Any]:
-    """TURN A PATIENT NODE INTO CLEAN JSON"""
+# ---------------------------------------------------------------- helpers
+
+def _notes_of(patient: Dict[str, Any]) -> List[str]:
+    """Walk a patient's notes LinkedList and return the texts."""
+    out: List[str] = []
+    node = patient["notes"].head
+    while node is not None:
+        out.append(node.val)
+        node = node.next
+    return out
+
+
+def _queue_items(queue) -> List[str]:
+    """Walk a linked-list Queue and return its values in order."""
+    out: List[str] = []
+    node = queue.front
+    while node is not None:
+        out.append(node.val)
+        node = node.next
+    return out
+
+
+def _serialize_patient(patient: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "id": node.id,
-        "name": node.name,
-        "age": node.age,
-        "disease": node.disease,
-        "doctor": node.doctor,
-        "status": node.status,
-        "next_id": node.next.id if node.next is not None else None,
+        "id": patient["id"],
+        "name": patient["name"],
+        "age": patient["age"],
+        "problem": patient["problem"],
+        "visits": patient["visits"],
+        "notes": _notes_of(patient),
     }
 
 
-def build_state_payload() -> Dict[str, Any]:
-    """PACK EVERYTHING THE FRONTEND NEEDS INTO ONE BIG PAYLOAD"""
-    patients = [serialize_patient(p) for p in hospital.display_patients()]
-    queue = [dict(item) for item in hospital.appointments]
+def _serialize_doctor(doc: Dict[str, Any]) -> Dict[str, Any]:
+    # heap rows: (priority, count, token, pid, name, fee). Sort a copy so
+    # the displayed queue is in real service order (Emergency first).
+    rows = sorted(doc["queue"].heap, key=lambda r: (r[0], r[1]))
     return {
-        "patients": patients,
-        "queue": queue,
-        "doctors": hospital.doctors,
-        "current_attending": hospital.current_attending,
-        "stats": {
-            "patient_count": hospital.patient_count,
-            "pending_appointments": hospital.pending_appointments_count,
-            "available_doctors": hospital.available_doctors_count,
-            "total_doctors": len(hospital.doctors),
-            "next_in_queue": hospital.next_in_queue,
-            "next_appointment": hospital.next_appointment,
-            "head_id": hospital.head.id if hospital.head is not None else None,
-        },
+        "id": doc["id"],
+        "name": doc["name"],
+        "spec": doc["spec"],
+        "fee": doc["fee"],
+        "waiting": len(doc["queue"].heap),
+        "queue": [
+            {
+                "token": row[2],
+                "patient_id": row[3],
+                "patient_name": row[4],
+                "fee": row[5],
+                "emergency": row[0] == 1,
+            }
+            for row in rows
+        ],
     }
 
+
+def _shifts() -> List[str]:
+    q = hospital.shift_q
+    return [q.items[(q.front + i) % q.size] for i in range(q.total)]
+
+
+def _dashboard() -> Dict[str, Any]:
+    free_beds = sum(1 for b in hospital.beds if b == 0)
+    waiting = sum(len(doc["queue"].heap) for doc in hospital.doctors_map.values())
+    return {
+        "patients": len(hospital.patients_map),
+        "doctors": len(hospital.doctors_map),
+        "waiting": waiting,
+        "free_beds": free_beds,
+        "total_beds": hospital.NUM_BEDS,
+    }
+
+
+def _undo_last() -> Optional[List[Any]]:
+    top = hospital.undo_stack.top
+    return list(top.val) if top is not None else None
+
+
+def _state_payload() -> Dict[str, Any]:
+    return {
+        "patients": [_serialize_patient(p) for p in hospital.patients_list],
+        "doctors": [_serialize_doctor(d) for d in hospital.doctors_map.values()],
+        "beds": [
+            {"bed": i + 1, "patient_id": pid if pid != 0 else None,
+             "status": "Free" if pid == 0 else "Occupied"}
+            for i, pid in enumerate(hospital.beds)
+        ],
+        "pharmacy": _queue_items(hospital.pharmacy_q),
+        "shifts": _shifts(),
+        "on_duty": _shifts()[0] if hospital.shift_q.total else None,
+        "undo_last": _undo_last(),
+        "stats": _dashboard(),
+    }
+
+
+# ---------------------------------------------------------------- handler
 
 class HospitalRequestHandler(SimpleHTTPRequestHandler):
-    """THE MAIN HTTP HANDLER — SERVES /web + ALL /api/* ROUTES"""
-
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
-    def log_message(self, format: str, *args: Any) -> None:
-        print(f"  [HTTP] {self.command} {self.path} -> {args[1] if len(args) > 1 else ''}")
-
-    def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
-        super().end_headers()
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        print(f"  [HTTP] {self.command} {self.path} -> "
+              f"{args[1] if len(args) > 1 else ''}")
 
     def _send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -75,190 +142,292 @@ class HospitalRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json_body(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return {}
         if length <= 0:
             return {}
-        raw = self.rfile.read(length).decode("utf-8")
         try:
-            data = json.loads(raw)
-            return data if isinstance(data, dict) else {}
-        except json.JSONDecodeError:
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
+        return data if isinstance(data, dict) else {}
 
-    def do_GET(self) -> None:
+    # ------------------------------------------------------------ GET
+    def do_GET(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
 
-        if path == "/api/state":
-            with state_lock:
-                self._send_json({"ok": True, "state": build_state_payload()})
-            return
+        with state_lock:
+            if path == "/api/state":
+                return self._send_json({"ok": True, "state": _state_payload()})
 
-        if path.startswith("/api/patients/"):
-            raw_id = path.removeprefix("/api/patients/").strip("/")
-            try:
-                patient_id = int(raw_id)
-            except ValueError:
-                self._send_json(
-                    {"ok": False, "found": False, "message": "Patient ID must be a valid integer."},
-                    status=400,
-                )
-                return
+            if path == "/api/dashboard":
+                return self._send_json({"ok": True, "stats": _dashboard()})
 
-            with state_lock:
-                node = hospital.search_patient(patient_id)
-                if node is None:
-                    self._send_json(
-                        {"ok": True, "found": False, "patient": None, "message": "Patient not found"}
-                    )
-                else:
-                    self._send_json(
-                        {
-                            "ok": True,
-                            "found": True,
-                            "patient": serialize_patient(node),
-                            "message": "Patient record found",
-                        }
-                    )
-            return
+            if path == "/api/patients":
+                field = query.get("sort", ["id"])[0]
+                field = "age" if field == "age" else "id"
+                ordered = bubble_sort(hospital.patients_list, field)
+                return self._send_json({
+                    "ok": True, "sort": field,
+                    "patients": [_serialize_patient(p) for p in ordered],
+                })
 
-        if path == "/":
-            self.path = "/index.html"
-        super().do_GET()
+            if path.startswith("/api/patients/"):
+                raw = path.removeprefix("/api/patients/").strip("/")
+                try:
+                    pid = int(raw)
+                except ValueError:
+                    return self._send_json(
+                        {"ok": False, "error": "Patient ID must be a number."}, 400)
+                found = binary_search(
+                    bubble_sort(hospital.patients_list, "id"), pid)
+                if not found:
+                    return self._send_json(
+                        {"ok": False, "error": "Patient not found."}, 404)
+                return self._send_json(
+                    {"ok": True, "patient": _serialize_patient(found)})
 
-    def do_POST(self) -> None:
+            if path == "/api/doctors":
+                return self._send_json({
+                    "ok": True,
+                    "doctors": [_serialize_doctor(d)
+                                for d in hospital.doctors_map.values()],
+                })
+
+            if path == "/api/beds":
+                return self._send_json(
+                    {"ok": True, "beds": _state_payload()["beds"]})
+
+            if path == "/api/pharmacy":
+                return self._send_json(
+                    {"ok": True, "queue": _queue_items(hospital.pharmacy_q)})
+
+            if path == "/api/shifts":
+                shifts = _shifts()
+                return self._send_json({
+                    "ok": True, "shifts": shifts,
+                    "on_duty": shifts[0] if shifts else None,
+                })
+
+        return super().do_GET()
+
+    # ----------------------------------------------------------- POST
+    def do_POST(self) -> None:  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         data = self._read_json_body()
 
-        if path == "/api/patients":
-            raw_id = data.get("id")
-            name = data.get("name", "")
-            raw_age = data.get("age")
-            disease = data.get("disease", "")
-            doctor = data.get("doctor", "General OPD")
+        with state_lock:
+            # ---- Add Patient
+            if path == "/api/patients":
+                try:
+                    pid = int(data.get("id"))
+                    age = int(data.get("age"))
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "ID and Age must be numbers."}, 400)
+                name = str(data.get("name", "")).strip()
+                problem = str(data.get("problem", "")).strip()
+                if not name or not problem:
+                    return self._send_json(
+                        {"ok": False, "error": "Name and Problem are required."}, 400)
+                if pid in hospital.patients_map:
+                    return self._send_json(
+                        {"ok": False, "error": "ID already exists."}, 400)
+                hospital.add_patient(pid, name, age, problem)
+                if pid not in hospital.patients_map:
+                    return self._send_json(
+                        {"ok": False, "error": "Could not add patient."}, 400)
+                return self._send_json({
+                    "ok": True, "message": "Patient added.",
+                    "patient": _serialize_patient(hospital.patients_map[pid]),
+                })
 
-            try:
-                patient_id = int(raw_id)
-            except (TypeError, ValueError):
-                self._send_json(
-                    {"ok": False, "message": "Patient ID must be a positive integer."},
-                    status=400,
-                )
-                return
+            # ---- Add Note
+            if path.startswith("/api/patients/") and path.endswith("/notes"):
+                raw = path.removeprefix("/api/patients/").removesuffix("/notes").strip("/")
+                try:
+                    pid = int(raw)
+                except ValueError:
+                    return self._send_json(
+                        {"ok": False, "error": "Patient ID must be a number."}, 400)
+                patient = hospital.patients_map.get(pid)
+                if not patient:
+                    return self._send_json(
+                        {"ok": False, "error": "Patient not found."}, 404)
+                note = str(data.get("note", "")).strip()
+                if not note:
+                    return self._send_json(
+                        {"ok": False, "error": "Note text is required."}, 400)
+                before = len(_notes_of(patient))
+                hospital.add_note(pid, note)
+                if len(_notes_of(patient)) != before + 1:
+                    return self._send_json(
+                        {"ok": False, "error": "Could not add note."}, 400)
+                return self._send_json({
+                    "ok": True, "message": "Note added.",
+                    "patient": _serialize_patient(patient),
+                })
 
-            try:
-                age = int(raw_age)
-            except (TypeError, ValueError):
-                self._send_json(
-                    {"ok": False, "message": "Patient age must be an integer between 0 and 150."},
-                    status=400,
-                )
-                return
+            # ---- Add Doctor
+            if path == "/api/doctors":
+                doc_id = str(data.get("id", "")).strip().upper()
+                name = str(data.get("name", "")).strip()
+                spec = str(data.get("spec", "")).strip()
+                try:
+                    fee = int(data.get("fee"))
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "Fee must be a number."}, 400)
+                if not doc_id or not name or not spec:
+                    return self._send_json(
+                        {"ok": False, "error": "ID, Name and Specialty are required."}, 400)
+                if doc_id in hospital.doctors_map:
+                    return self._send_json(
+                        {"ok": False, "error": "Doctor ID already exists."}, 400)
+                hospital.doctors_map[doc_id] = {
+                    "id": doc_id, "name": name, "spec": spec, "fee": fee,
+                    "queue": PriorityQueue(),
+                }
+                hospital.shift_q.enqueue(f"{doc_id} - {name}")
+                return self._send_json({
+                    "ok": True, "message": "Doctor added.",
+                    "doctor": _serialize_doctor(hospital.doctors_map[doc_id]),
+                })
 
-            with state_lock:
-                ok, message = hospital.add_patient(
-                    patient_id, str(name), age, str(disease), str(doctor)
-                )
-                status = 201 if ok else 400
-                self._send_json(
-                    {"ok": ok, "message": message, "state": build_state_payload()},
-                    status=status,
-                )
-            return
+            # ---- Book Appointment
+            if path == "/api/appointments":
+                doc_id = str(data.get("doctor_id", "")).strip().upper()
+                try:
+                    pid = int(data.get("patient_id"))
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "Patient ID must be a number."}, 400)
+                is_emg = bool(data.get("emergency"))
+                doc = hospital.doctors_map.get(doc_id)
+                pat = hospital.patients_map.get(pid)
+                if not doc or not pat:
+                    return self._send_json(
+                        {"ok": False, "error": "Invalid doctor or patient ID."}, 400)
+                hospital.book_appointment(doc_id, pid, is_emg)
+                # Token is f"{E|N}-{queue.count}" — computed from the
+                # doctor's queue count after enqueue.
+                token = f"{'E' if is_emg else 'N'}-{doc['queue'].count}"
+                return self._send_json({
+                    "ok": True, "message": f"Booked {token} for {pat['name']}.",
+                    "token": token, "doctor": doc["name"],
+                    "patient": pat["name"], "fee": doc["fee"],
+                    "emergency": is_emg,
+                })
 
-        if path == "/api/appointments":
-            name = data.get("name", "")
-            doctor = data.get("doctor")
-            with state_lock:
-                ok, message = hospital.book_appointment(
-                    str(name), str(doctor) if doctor else None
-                )
-                status = 201 if ok else 400
-                self._send_json(
-                    {"ok": ok, "message": message, "state": build_state_payload()},
-                    status=status,
-                )
-            return
+            # ---- Beds: assign / free
+            if path == "/api/beds/assign":
+                try:
+                    bed_no = int(data.get("bed"))
+                    pid = int(data.get("patient_id"))
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "Bed and Patient ID must be numbers."}, 400)
+                idx = bed_no - 1
+                if not 0 <= idx < hospital.NUM_BEDS:
+                    return self._send_json(
+                        {"ok": False, "error": f"Bed must be 1-{hospital.NUM_BEDS}."}, 400)
+                if hospital.beds[idx] != 0:
+                    return self._send_json(
+                        {"ok": False, "error": "That bed is already occupied."}, 400)
+                if pid not in hospital.patients_map:
+                    return self._send_json(
+                        {"ok": False, "error": "Patient not found."}, 404)
+                hospital.beds[idx] = pid
+                hospital.undo_stack.push(("BED", idx, 0))
+                return self._send_json({
+                    "ok": True, "message": f"Bed {bed_no} assigned to patient {pid}."})
 
-        if path == "/api/appointments/call-next":
-            with state_lock:
-                ok, message = hospital.call_next()
-                attended = hospital.current_attending if ok else None
-                self._send_json(
-                    {
-                        "ok": ok,
-                        "message": message,
-                        "attended": attended,
-                        "state": build_state_payload(),
-                    }
-                )
-            return
+            if path == "/api/beds/free":
+                try:
+                    bed_no = int(data.get("bed"))
+                except (TypeError, ValueError):
+                    return self._send_json(
+                        {"ok": False, "error": "Bed must be a number."}, 400)
+                idx = bed_no - 1
+                if not 0 <= idx < hospital.NUM_BEDS:
+                    return self._send_json(
+                        {"ok": False, "error": f"Bed must be 1-{hospital.NUM_BEDS}."}, 400)
+                if hospital.beds[idx] == 0:
+                    return self._send_json(
+                        {"ok": False, "error": "That bed is already free."}, 400)
+                old_pid = hospital.beds[idx]
+                hospital.beds[idx] = 0
+                hospital.undo_stack.push(("BED", idx, old_pid))
+                return self._send_json({
+                    "ok": True, "message": f"Bed {bed_no} freed (was patient {old_pid})."})
 
-        if path == "/api/demo-seed":
-            # quick sample data for testing the UI without typing everything manually
-            samples = [
-                (101, "Ali Khan", 32, "Seasonal Fever", "Dr. Ali Hamza — General Medicine"),
-                (102, "Sara Ahmed", 25, "Chronic Migraine", "Dr. Usman — Neurology"),
-                (103, "Usman Tariq", 47, "Hypertension", "Dr. Shawal — Cardiology"),
-                (104, "Ayesha Malik", 19, "Allergic Asthma", "Dr. Hifza — ENT & Dermatology"),
-            ]
-            with state_lock:
-                added = 0
-                for pid, pname, page, pdisease, pdoctor in samples:
-                    ok, _ = hospital.add_patient(pid, pname, page, pdisease, pdoctor)
-                    if ok:
-                        added += 1
-                if hospital.pending_appointments_count == 0:
-                    hospital.book_appointment("Ali Khan", "Dr. Ali Hamza — General Medicine")
-                    hospital.book_appointment("Sara Ahmed", "Dr. Usman — Neurology")
-                msg = (
-                    f"Loaded {added} sample patient records & 2 appointments"
-                    if added > 0
-                    else "Sample records are already loaded"
-                )
-                self._send_json({"ok": True, "message": msg, "state": build_state_payload()})
-            return
+            # ---- Undo
+            if path == "/api/undo":
+                last = _undo_last()
+                if not last:
+                    return self._send_json(
+                        {"ok": False, "error": "Nothing to undo."}, 400)
+                hospital.undo()
+                return self._send_json({
+                    "ok": True, "message": f"Undid {last[0]}.",
+                    "undid": last,
+                })
 
-        self._send_json({"ok": False, "message": "Endpoint not found"}, status=404)
+            # ---- Pharmacy: add token / serve
+            if path == "/api/pharmacy":
+                token = str(data.get("token", "")).strip()
+                if not token:
+                    return self._send_json(
+                        {"ok": False, "error": "Token or Name is required."}, 400)
+                hospital.pharmacy_q.enqueue(token)
+                return self._send_json(
+                    {"ok": True, "message": f"Token '{token}' added to pharmacy queue."})
+
+            if path == "/api/pharmacy/serve":
+                served = hospital.pharmacy_q.dequeue()
+                if served is None:
+                    return self._send_json(
+                        {"ok": False, "error": "Pharmacy queue is empty."}, 400)
+                return self._send_json(
+                    {"ok": True, "message": f"Served: {served}", "served": served})
+
+            # ---- Shifts: rotate
+            if path == "/api/shifts/rotate":
+                now = hospital.shift_q.rotate()
+                if now is None:
+                    return self._send_json(
+                        {"ok": False, "error": "No shifts to rotate."}, 400)
+                return self._send_json(
+                    {"ok": True, "message": f"Now on duty: {now}", "on_duty": now})
+
+        return self._send_json(
+            {"ok": False, "error": "Unknown endpoint."}, 404)
 
 
-def run_server(host: str = HOST, port: int = PORT, open_browser: bool = True) -> None:
-    server = ThreadingHTTPServer((host, port), HospitalRequestHandler)
-    url = f"http://{host}:{port}"
-    print("=" * 64)
-    print("  HOSPITAL MANAGEMENT SYSTEM — WEB SERVER RUNNING")
-    print(f"  Open in browser: {url}")
-    print("  Press Ctrl+C to stop the server.")
-    print("=" * 64)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Hospital Management System")
+    parser.add_argument("--host", default=HOST)
+    parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
 
-    if open_browser:
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
-
+    server = ThreadingHTTPServer((args.host, args.port), HospitalRequestHandler)
+    url = f"http://{args.host}:{args.port}"
+    print(f"Hospital Management System running at {url}")
+    print("Press Ctrl+C to stop.")
+    if not args.no_browser:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down Hospital Management System server...")
-    finally:
-        server.server_close()
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run the Hospital Management System web server."
-    )
-    parser.add_argument("--host", default=HOST, help=f"Bind host (default: {HOST})")
-    parser.add_argument(
-        "--port", type=int, default=PORT, help=f"Bind port (default: {PORT})"
-    )
-    parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Do not automatically open the dashboard in a browser",
-    )
-    return parser.parse_args()
+        print("\nShutting down.")
+        server.shutdown()
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    run_server(host=args.host, port=args.port, open_browser=not args.no_browser)
+    main()
