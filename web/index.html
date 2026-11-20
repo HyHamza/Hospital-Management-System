@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hospital Management System</title>
+  <link rel="stylesheet" href="/styles.css?v=3" />
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Hospital Management System</h1>
+          <p>Patient Records &amp; Consultation Desk</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <span class="clock-text" id="live-clock"></span>
+        <span class="status-pill" id="connection-status">
+          <span class="status-dot"></span>
+          Online
+        </span>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-seed-demo">
+          Load Sample Data
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Live KPI Cards -->
+    <section class="kpi-grid" aria-label="Hospital Overview">
+      <article class="kpi-card">
+        <span class="kpi-label">Total Patients</span>
+        <span class="kpi-value" id="stat-patients">0</span>
+      </article>
+
+      <article class="kpi-card">
+        <span class="kpi-label">Waiting Queue</span>
+        <span class="kpi-value" id="stat-queue">0</span>
+      </article>
+
+      <article class="kpi-card">
+        <span class="kpi-label">Available Doctors</span>
+        <div class="kpi-value-row">
+          <span class="kpi-value" id="stat-doctors">0</span>
+          <span class="kpi-meta" id="stat-doctors-total">of 6</span>
+        </div>
+      </article>
+
+      <article class="kpi-card kpi-card-highlight">
+        <span class="kpi-label">Up Next</span>
+        <div class="kpi-next-row">
+          <div class="kpi-next-info">
+            <span class="kpi-next-name empty" id="stat-next">No appointments</span>
+            <span class="kpi-next-doc" id="stat-next-doc"></span>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-call-next-top">
+            Call Next
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <!-- Doctors & Medical Fields -->
+    <section class="panel doctors-panel" aria-label="Doctors and Medical Fields">
+      <div class="doctors-header">
+        <h2>Doctors &amp; Medical Fields</h2>
+      </div>
+      <div class="doctors-grid" id="doctors-list"></div>
+    </section>
+
+    <!-- Active Consultation Banner -->
+    <section class="attending-banner hidden" id="attending-banner" role="status" aria-live="polite">
+      <div class="attending-content">
+        <span class="attending-tag">NOW ATTENDING</span>
+        <strong id="attending-name">—</strong>
+        <span class="attending-doc-badge" id="attending-doctor"></span>
+      </div>
+      <button type="button" class="btn-icon" id="btn-dismiss-attending" aria-label="Dismiss">&times;</button>
+    </section>
+
+    <!-- Main Workspace -->
+    <div class="workspace-grid">
+      <!-- LEFT COLUMN: Simple Action Forms -->
+      <div class="column-left">
+        <!-- 1. Add Patient -->
+        <section class="panel">
+          <div class="panel-header compact">
+            <h2>Add Patient</h2>
+          </div>
+
+          <form id="form-add-patient" class="form-grid" novalidate>
+            <div class="field-row">
+              <div class="field">
+                <label for="input-id">Patient ID</label>
+                <input id="input-id" name="id" type="number" min="1" placeholder="e.g. 101" required />
+              </div>
+              <div class="field">
+                <label for="input-age">Age</label>
+                <input id="input-age" name="age" type="number" min="0" max="150" placeholder="e.g. 32" required />
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="input-name">Patient Name</label>
+              <input id="input-name" name="name" type="text" placeholder="Enter full name" required />
+            </div>
+
+            <div class="field">
+              <label for="input-disease">Disease</label>
+              <input id="input-disease" name="disease" type="text" placeholder="e.g. Fever" required />
+            </div>
+
+            <div class="field">
+              <label for="input-doctor">Doctor &amp; Field</label>
+              <select id="input-doctor" name="doctor"></select>
+            </div>
+
+            <p class="form-error hidden" id="add-patient-error" role="alert"></p>
+
+            <button type="submit" class="btn btn-primary btn-full" id="btn-add-patient">
+              Add Patient
+            </button>
+          </form>
+        </section>
+
+        <!-- 2. Book Appointment -->
+        <section class="panel">
+          <div class="panel-header compact">
+            <h2>Book Appointment</h2>
+          </div>
+
+          <form id="form-book-appointment" class="form-grid" novalidate>
+            <div class="field">
+              <label for="input-appt-name">Patient Name</label>
+              <input
+                id="input-appt-name"
+                type="text"
+                list="registered-patients-datalist"
+                placeholder="Select or type patient name"
+                required
+              />
+              <datalist id="registered-patients-datalist"></datalist>
+            </div>
+
+            <div class="field">
+              <label for="input-appt-doctor">Doctor &amp; Field</label>
+              <select id="input-appt-doctor" name="appt_doctor"></select>
+            </div>
+
+            <p class="form-error hidden" id="book-appt-error" role="alert"></p>
+
+            <button type="submit" class="btn btn-primary btn-full">
+              Book Appointment
+            </button>
+          </form>
+        </section>
+
+        <!-- 3. Search Patient -->
+        <section class="panel">
+          <div class="panel-header compact">
+            <h2>Search Patient</h2>
+          </div>
+
+          <form id="form-search-patient" class="inline-form" novalidate>
+            <div class="field field-grow">
+              <label for="input-search-id">Patient ID</label>
+              <div class="input-action-group">
+                <input id="input-search-id" type="number" min="1" placeholder="Enter Patient ID" required />
+                <button type="submit" class="btn btn-secondary">Search</button>
+              </div>
+            </div>
+          </form>
+
+          <div id="search-result" class="search-result hidden" aria-live="polite"></div>
+        </section>
+      </div>
+
+      <!-- RIGHT COLUMN: Appointments Queue & All Patients -->
+      <div class="column-right">
+        <!-- Appointments Queue -->
+        <section class="panel">
+          <div class="panel-header compact">
+            <h2>Appointments</h2>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-call-next">
+              Call Next Patient
+            </button>
+          </div>
+
+          <div class="queue-track" id="queue-list" aria-live="polite">
+            <div class="empty-state">
+              <p class="empty-title">No pending appointments</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- All Patients Table -->
+        <section class="panel">
+          <div class="panel-header compact">
+            <h2>All Patients</h2>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table" id="patients-table">
+              <thead>
+                <tr>
+                  <th class="col-id">ID</th>
+                  <th>Name</th>
+                  <th class="col-age">Age</th>
+                  <th>Disease</th>
+                  <th>Doctor &amp; Field</th>
+                  <th>Status</th>
+                  <th class="col-action">Action</th>
+                </tr>
+              </thead>
+              <tbody id="patients-tbody">
+                <tr>
+                  <td colspan="7">
+                    <div class="empty-state">
+                      <p class="empty-title">No patient records found</p>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <script src="/app.js?v=3"></script>
+</body>
+</html>
