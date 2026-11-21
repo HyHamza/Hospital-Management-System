@@ -17,19 +17,49 @@ function esc(s) {
   }[c]));
 }
 
+/* Fallback text so an error NEVER renders as an empty red box. */
+const FALLBACK_ERR = "Kuch ghalat hua — dobara try karo.";
+
+function errOf(res) {
+  return (res && res.error) || FALLBACK_ERR;
+}
+
+function offlineBanner() {
+  return `<div class="msg msg-err">Server se connect nahi ho raha. Terminal mein <b>python server.py</b> chalao, phir page <b>http://127.0.0.1:8000</b> se kholo — index.html file double-click se nahi.</div>`;
+}
+
 async function api(path, method = "GET", payload = null) {
-  const res = await fetch(path, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: payload ? JSON.stringify(payload) : null,
-  });
-  return res.json();
+  /* NEVER throws: every failure comes back as { ok:false, error }
+     so the UI can always show a real message instead of dying
+     silently. (Old version threw on fetch/JSON failure and the
+     whole page went blank with no message at all.) */
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: payload ? JSON.stringify(payload) : null,
+    });
+  } catch (e) {
+    // Server not running, or page opened via file:// double-click.
+    return { ok: false, error: "Server se connect nahi ho raha. Terminal mein 'python server.py' chalao, phir page refresh karo." };
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    return { ok: false, error: `Server se ghalat jawab mila (HTTP ${res.status}). 'python server.py' se chalao, file double-click se nahi.` };
+  }
+  if (!res.ok && data && !data.error) {
+    data.error = `Server error (HTTP ${res.status}).`;
+  }
+  return data;
 }
 
 let toastTimer = null;
 function toast(msg, isErr = false) {
   const t = document.getElementById("toast");
-  t.textContent = msg;
+  t.textContent = msg || FALLBACK_ERR;
   t.classList.toggle("err", isErr);
   t.classList.add("show");
   clearTimeout(toastTimer);
@@ -48,10 +78,14 @@ function refreshStats() {
 }
 
 async function loadState() {
+  /* Never throws and never kills the boot: on failure state stays
+     null and the dashboard shows the offline banner instead. */
   const res = await api("/api/state");
-  if (res.ok) {
+  if (res && res.ok) {
     state = res.state;
     refreshStats();
+  } else {
+    state = null;
   }
   return state;
 }
@@ -127,8 +161,9 @@ function renderAddPatient(msg = "", ok = true) {
       toast(res.message);
       renderAddPatient(res.message, true);
     } else {
-      toast(res.error, true);
-      renderAddPatient(res.error, false);
+      const msg = errOf(res);
+      toast(msg, true);
+      renderAddPatient(msg, false);
     }
   });
 }
@@ -148,6 +183,7 @@ function renderViewSorted() {
   const sorted = [...list].sort((a, b) =>
     sortField === "age" ? a.age - b.age : a.id - b.id);
   body.innerHTML = `
+    ${state ? "" : offlineBanner()}
     <div class="field" style="margin-bottom:12px"><label>Sort by</label>
       <div class="seg">
         <button type="button" id="sort-id" class="${sortField === "id" ? "on" : ""}">ID</button>
@@ -185,7 +221,7 @@ function renderFindPatient(msg = "", ok = true) {
     const res = await api(`/api/patients/${id}`);
     document.getElementById("find-result").innerHTML = res.ok
       ? patientCard(res.patient)
-      : `<div class="msg msg-err">${esc(res.error)}</div>`;
+      : `<div class="msg msg-err">${esc(errOf(res))}</div>`;
   });
 }
 
@@ -208,8 +244,9 @@ function renderAddNote(msg = "", ok = true) {
       toast(res.message);
       renderAddNote(res.message, true);
     } else {
-      toast(res.error, true);
-      renderAddNote(res.error, false);
+      const msg = errOf(res);
+      toast(msg, true);
+      renderAddNote(msg, false);
     }
   });
 }
@@ -218,6 +255,7 @@ function renderDoctors(msg = "", ok = true) {
   const docs = state ? state.doctors : [];
   body.innerHTML = `
     ${msgHtml(msg, ok)}
+    ${state ? "" : offlineBanner()}
     ${docs.map((d) => `
       <div class="card">
         <h3>${esc(d.name)} <span class="muted">${esc(d.id)} • ${esc(d.spec)} • Fee Rs ${d.fee}</span></h3>
@@ -248,14 +286,25 @@ function renderDoctors(msg = "", ok = true) {
       toast(res.message);
       renderDoctors(res.message, true);
     } else {
-      toast(res.error, true);
-      renderDoctors(res.error, false);
+      const msg = errOf(res);
+      toast(msg, true);
+      renderDoctors(msg, false);
     }
   });
 }
 
 function renderBook(msg = "", ok = true) {
   const docs = state ? state.doctors : [];
+  if (!state) {
+    /* No doctors at all = state never loaded (server off). An empty
+       required <select> would silently block the submit with zero
+       feedback — show the real reason instead. */
+    body.innerHTML = `
+    ${msgHtml(msg, ok)}
+    ${offlineBanner()}
+    <p class="muted">Jab server connect ho jayega to yahan 5 starter doctors aa jayenge.</p>`;
+    return;
+  }
   body.innerHTML = `
     ${msgHtml(msg, ok)}
     <form id="f-book" class="form-grid">
@@ -294,9 +343,10 @@ function renderBook(msg = "", ok = true) {
         <div class="card"><h3>Token ${esc(res.token)} ${res.emergency ? '<span class="tag tag-emg">EMERGENCY</span>' : '<span class="tag tag-nor">NORMAL</span>'}</h3>
         <p>${esc(res.patient)} with ${esc(res.doctor)} — Fee Rs ${res.fee}</p></div>`;
     } else {
-      toast(res.error, true);
+      const msg = errOf(res);
+      toast(msg, true);
       document.getElementById("book-result").innerHTML =
-        `<div class="msg msg-err">${esc(res.error)}</div>`;
+        `<div class="msg msg-err">${esc(msg)}</div>`;
     }
   });
 }
@@ -305,6 +355,7 @@ function renderBeds(msg = "", ok = true) {
   const beds = state ? state.beds : [];
   body.innerHTML = `
     ${msgHtml(msg, ok)}
+    ${state ? "" : offlineBanner()}
     <div class="beds-grid">
       ${beds.map((b) => `<div class="bed ${b.status === "Free" ? "free" : "occ"}">
           Bed ${b.bed}<small>${b.status === "Free" ? "Free" : "Patient " + b.patient_id}</small>
@@ -329,16 +380,16 @@ function renderBeds(msg = "", ok = true) {
       bed: Number(f.get("bed")), patient_id: Number(f.get("patient_id")),
     });
     await loadState();
-    toast(res.ok ? res.message : res.error, !res.ok);
-    renderBeds(res.ok ? res.message : res.error, res.ok);
+    toast(res.ok ? res.message : errOf(res), !res.ok);
+    renderBeds(res.ok ? res.message : errOf(res), res.ok);
   });
   document.getElementById("btn-free-bed").addEventListener("click", async () => {
     const bed = Number(document.querySelector('#f-bed [name="bed"]').value);
     if (!bed) { toast("Enter a bed number first.", true); return; }
     const res = await api("/api/beds/free", "POST", { bed });
     await loadState();
-    toast(res.ok ? res.message : res.error, !res.ok);
-    renderBeds(res.ok ? res.message : res.error, res.ok);
+    toast(res.ok ? res.message : errOf(res), !res.ok);
+    renderBeds(res.ok ? res.message : errOf(res), res.ok);
   });
 }
 
@@ -362,14 +413,14 @@ function renderPharmacy(msg = "", ok = true) {
     e.preventDefault();
     const res = await api("/api/pharmacy", "POST", { token: new FormData(e.target).get("token") });
     await loadState();
-    toast(res.ok ? res.message : res.error, !res.ok);
-    renderPharmacy(res.ok ? res.message : res.error, res.ok);
+    toast(res.ok ? res.message : errOf(res), !res.ok);
+    renderPharmacy(res.ok ? res.message : errOf(res), res.ok);
   });
   document.getElementById("btn-serve").addEventListener("click", async () => {
     const res = await api("/api/pharmacy/serve", "POST", {});
     await loadState();
-    toast(res.ok ? res.message : res.error, !res.ok);
-    renderPharmacy(res.ok ? res.message : res.error, res.ok);
+    toast(res.ok ? res.message : errOf(res), !res.ok);
+    renderPharmacy(res.ok ? res.message : errOf(res), res.ok);
   });
 }
 
@@ -387,8 +438,8 @@ function renderShifts(msg = "", ok = true) {
   document.getElementById("btn-rotate").addEventListener("click", async () => {
     const res = await api("/api/shifts/rotate", "POST", {});
     await loadState();
-    toast(res.ok ? res.message : res.error, !res.ok);
-    renderShifts(res.ok ? res.message : res.error, res.ok);
+    toast(res.ok ? res.message : errOf(res), !res.ok);
+    renderShifts(res.ok ? res.message : errOf(res), res.ok);
   });
 }
 
@@ -439,8 +490,8 @@ function renderUndo(msg = "", ok = true) {
 async function doUndo() {
   const res = await api("/api/undo", "POST", {});
   await loadState();
-  toast(res.ok ? res.message : res.error, !res.ok);
-  if (currentOp === "undo") renderUndo(res.ok ? res.message : res.error, res.ok);
+  toast(res.ok ? res.message : errOf(res), !res.ok);
+  if (currentOp === "undo") renderUndo(res.ok ? res.message : errOf(res), res.ok);
   else openOp(currentOp);
 }
 

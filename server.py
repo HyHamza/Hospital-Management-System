@@ -213,6 +213,13 @@ class HospitalRequestHandler(SimpleHTTPRequestHandler):
                     "on_duty": shifts[0] if shifts else None,
                 })
 
+            if path.startswith("/api/"):
+                # Unknown API route: answer JSON, never an HTML 404 page —
+                # the frontend's res.json() would throw on HTML and the
+                # whole page would die silently with no error message.
+                return self._send_json(
+                    {"ok": False, "error": "Unknown endpoint."}, 404)
+
         return super().do_GET()
 
     # ----------------------------------------------------------- POST
