@@ -68,11 +68,13 @@ function toast(msg, isErr = false) {
 
 function refreshStats() {
   if (!state) return;
-  const s = state.stats;
-  document.getElementById("stat-patients").textContent = s.patients;
-  document.getElementById("stat-doctors").textContent = s.doctors;
-  document.getElementById("stat-waiting").textContent = s.waiting;
-  document.getElementById("stat-beds").textContent = s.free_beds;
+  /* ?? 0: a missing number must show 0, never blank and never
+     the word "undefined". */
+  const s = state.stats || {};
+  document.getElementById("stat-patients").textContent = s.patients ?? 0;
+  document.getElementById("stat-doctors").textContent = s.doctors ?? 0;
+  document.getElementById("stat-waiting").textContent = s.waiting ?? 0;
+  document.getElementById("stat-beds").textContent = s.free_beds ?? 0;
   document.getElementById("last-update").textContent =
     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -258,8 +260,8 @@ function renderDoctors(msg = "", ok = true) {
     ${state ? "" : offlineBanner()}
     ${docs.map((d) => `
       <div class="card">
-        <h3>${esc(d.name)} <span class="muted">${esc(d.id)} • ${esc(d.spec)} • Fee Rs ${d.fee}</span></h3>
-        <p>Waiting: <b>${d.waiting}</b> ${d.queue.length
+        <h3>${esc(d.name)} <span class="muted">${esc(d.id)} • ${esc(d.spec || "—")} • Fee Rs ${d.fee ?? "—"}</span></h3>
+        <p>Waiting: <b>${d.waiting ?? 0}</b> ${d.queue.length
           ? "— " + d.queue.map((q) => `<span class="tag ${q.emergency ? "tag-emg" : "tag-nor"}">${esc(q.token)} · ${esc(q.patient_name)}</span>`).join(" ")
           : `<span class="muted">queue empty</span>`}</p>
       </div>`).join("") || `<p class="muted">No doctors yet.</p>`}
@@ -310,7 +312,7 @@ function renderBook(msg = "", ok = true) {
     <form id="f-book" class="form-grid">
       <div class="field"><label>Doctor</label>
         <select name="doctor_id" required>
-          ${docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)} — ${esc(d.spec)} (Rs ${d.fee})</option>`).join("")}
+          ${docs.map((d) => `<option value="${esc(d.id)}">${esc(d.name)} — ${esc(d.spec || "—")} (Rs ${d.fee ?? "—"})</option>`).join("")}
         </select></div>
       <div class="field"><label>Patient ID</label>
         <input type="number" name="patient_id" min="1" placeholder="e.g. 101" required></div>
@@ -499,6 +501,23 @@ async function doUndo() {
 
 document.querySelectorAll(".tile").forEach((t) =>
   t.addEventListener("click", () => openOp(t.dataset.op)));
+
+/* Top stat cards are shortcuts, not decoration: click opens the
+   matching view (Patients -> list, Doctors -> doctors, Waiting ->
+   doctor queues, Free Beds -> beds). */
+const STAT_OPS = {
+  "patients": "view-sorted",
+  "doctors": "doctors",
+  "waiting": "doctors",
+  "beds": "beds",
+};
+document.querySelectorAll(".stat-card[data-stat]").forEach((c) => {
+  const go = () => openOp(STAT_OPS[c.dataset.stat] || "dashboard");
+  c.addEventListener("click", go);
+  c.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); }
+  });
+});
 
 document.getElementById("top-undo").addEventListener("click", doUndo);
 
